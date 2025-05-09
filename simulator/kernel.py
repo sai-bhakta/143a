@@ -14,8 +14,11 @@ PID = int
 class PCB:
     pid: PID
 
-    def __init__(self, pid: PID):
+    def __init__(self, pid: PID, priority: int = float('inf')):
         self.pid = pid
+        self.priority = priority
+        self.should_exit = False
+
 
 # This class represents the Kernel of the simulation.
 # The simulator will create an instance of this object and use it to respond to syscalls and interrupts.
@@ -32,7 +35,7 @@ class Kernel:
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def __init__(self, scheduling_algorithm: str):
         self.scheduling_algorithm = scheduling_algorithm
-        self.ready_queue = deque()
+        self.ready_queue: deque[PCB] = deque()
         self.waiting_queue = deque()
         self.idle_pcb = PCB(0)
         self.running = self.idle_pcb
@@ -42,17 +45,20 @@ class Kernel:
     # priority is the priority of new_process.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def new_process_arrived(self, new_process: PID, priority: int) -> PID:
-        return self.running.pid
+        self.ready_queue.append(PCB(new_process, priority))
+        return self.choose_next_process()
 
     # This method is triggered every time the current process performs an exit syscall.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_exit(self) -> PID:
-        return self.running.pid
+        self.running.should_exit = True
+        return self.choose_next_process()
 
     # This method is triggered when the currently running process requests to change its priority.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_set_priority(self, new_priority: int) -> PID:
-        return self.running.pid
+        self.running.priority = new_priority
+        return self.choose_next_process()
 
 
     # This is where you can select the next process to run.
@@ -60,12 +66,44 @@ class Kernel:
     # Feel free to modify this method as you see fit.
     # It is not required to actually use this method but it is recommended.
     def choose_next_process(self):
-        if len(self.ready_queue) == 0:
-                return self.idle_pcb
-        
+        # First Come First Serve
         if self.scheduling_algorithm == "FCFS":
-            self.running = self.idle_pcb
-        elif self.scheduling_algorithm == "Priority":
-            self.running = self.idle_pcb
-        
+            # If there is no process running or if the current process has finished, replace it with the next process
+            if (self.running == self.idle_pcb) or self.running.should_exit:
+                self.running = self.ready_queue.popleft() if len(self.ready_queue) > 0 else self.idle_pcb
+                return self.running.pid
+            return self.running.pid
 
+        # Priority
+        elif self.scheduling_algorithm == "Priority":
+            # If the current process has finished, stop it and remove from consideration
+            if self.running.should_exit:
+                self.running = self.idle_pcb
+
+            # Find the process with the highest priority and min pid (for tie breaking)
+            min_priority = float('inf')
+            min_pid = float('inf')
+            min_pcb = None
+            for process in [i for i in self.ready_queue] + [self.running]: # Also consider the current running process
+                if process.priority < min_priority:
+                    min_priority = process.priority
+                    min_pid = process.pid
+                    min_pcb = process
+                elif process.priority == min_priority and process.pid < min_pid:
+                    min_priority = process.priority
+                    min_pid = process.pid
+                    min_pcb = process
+            
+            # If the current running process is the one with highest priority, do nothing
+            if self.running.pid == min_pid:
+                return self.running.pid
+            
+            # Add the current running process back to the ready queue
+            self.ready_queue.append(self.running)
+            
+            # Set the new running process to the one with highest priority and remove it from the ready queue
+            self.running = min_pcb
+            self.ready_queue.remove(min_pcb)
+
+            # Return the new running process
+            return self.running.pid
