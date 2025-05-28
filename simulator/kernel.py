@@ -46,6 +46,10 @@ class Kernel:
         self.time = 0
         self.last_time_checked = -1000
 
+        # For mutexes and semaphores
+        self.mutexes = {}
+        self.semaphores = {}
+
         # For multilevel only
         self.foreground_queue = deque()
         self.background_queue = deque()
@@ -265,18 +269,45 @@ class Kernel:
     # This method is triggered when the currently running process requests to initialize a new mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_init_mutex(self, mutex_id: int):
-        return
+        if mutex_id not in self.mutexes:
+            self.mutexes[mutex_id] = {"locked": False, "owner": None, "waiting_queue": deque()}
+        self.logger.log(self.mutexes)
 
     # This method is triggered when the currently running process calls lock() on an existing mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_mutex_lock(self, mutex_id: int) -> PID:
-        return self.running.pid
-
+        mutex = self.mutexes[mutex_id]
+        if mutex["locked"]:
+            mutex["waiting_queue"].append(self.running)
+            self.running = self.idle_pcb
+            
+        else:
+            mutex["locked"] = True
+            mutex["owner"] = self.running.pid
+        self.logger.log(self.mutexes)
+        return self.choose_next_process()
 
     # This method is triggered when the currently running process calls unlock() on an existing mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_mutex_unlock(self, mutex_id: int) -> PID:
-        return self.running.pid
+        mutex = self.mutexes[mutex_id]
+        mutex["locked"] = False
+        mutex["owner"] = None
+
+        if len(mutex["waiting_queue"]) > 0:
+            if self.scheduling_algorithm == "FCFS" or self.scheduling_algorithm == "RR":
+                released_process = min(mutex["waiting_queue"], key=lambda p: p.pid)
+            elif self.scheduling_algorithm == "Priority":
+                released_process = min(mutex["waiting_queue"], key=lambda p: p.priority)
+            else:
+                pass 
+            
+            mutex["waiting_queue"].remove(released_process)
+            self.ready_queue.append(released_process)
+            mutex["locked"] = True
+            mutex["owner"] = released_process.pid
+        self.logger.log(self.mutexes)
+        return self.choose_next_process()
 
     # This function represents the hardware timer interrupt.
     # It is triggered every 10 microseconds and is the only way a kernel can track passing time.
