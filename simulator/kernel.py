@@ -50,7 +50,11 @@ class Kernel:
         self.foreground_queue = deque()
         self.background_queue = deque()
         self.current_level = None
-        self.last_level_changed = -1000
+        self.last_time_level_changed = -1000
+        self.foreground_time = 0
+        self.background_time = 0
+        self.last_time_foreground_checked = -1000
+        self.last_time_background_checked = -1000
 
     # This method is triggered every time a new process has arrived.
     # new_process is this process's PID.
@@ -161,6 +165,9 @@ class Kernel:
         self.logger.log(f"Current level: {self.current_level}")
         self.logger.log(f"Foreground queue: {self.foreground_queue}")
         self.logger.log(f"Background queue: {self.background_queue}")
+        self.logger.log(f"Foreground time: {self.foreground_time}")
+        self.logger.log(f"Background time: {self.background_time}")
+
         # If nothing has ran yet
         if self.current_level is None:
             if len(self.foreground_queue) > 0:
@@ -177,13 +184,18 @@ class Kernel:
                 return self.running.pid
             
 
-        self.logger.log(f"Time: {self.time}, Last level changed: {self.last_level_changed}, Time - Last level changed: {self.time - self.last_level_changed}")
+        self.logger.log(f"Time: {self.time}, Last level changed: {self.last_time_level_changed}, Time - Last level changed: {self.time - self.last_time_level_changed}")
+
+        # Check to see if we need to change levels
         current_queue = self.foreground_queue if self.current_level == "Foreground" else self.background_queue
-        if (self.time - self.last_level_changed >= (200 if not self.running.should_exit else 190)) or (len(current_queue) == 0 and self.running.should_exit) or (self.running == self.idle_pcb):
+        if (self.time - self.last_time_level_changed >= (200 if not self.running.should_exit else 190)) or (len(current_queue) == 0 and self.running.should_exit) or (self.running == self.idle_pcb):
             if self.current_level == "Foreground" and len(self.background_queue) > 0:
                 self.current_level = "Background"
                 if not self.running.should_exit:
-                    self.foreground_queue.append(self.running)
+                    if self.foreground_time - self.last_time_foreground_checked < 40:
+                        self.foreground_queue.appendleft(self.running)
+                    else:
+                        self.foreground_queue.append(self.running)
                 self.logger.log("Moving to background")
                 self.running = self.idle_pcb
             elif self.current_level == "Background" and len(self.foreground_queue) > 0:
@@ -193,19 +205,22 @@ class Kernel:
                 self.logger.log("Moving to foreground")
                 self.running = self.idle_pcb
 
-            self.last_level_changed = self.time
+            self.last_time_level_changed = self.time
 
 
         if self.current_level == "Foreground":
             ############## ROUND ROBIN ##############
             # Don't do anything if the quantum hasn't passed yet
-            if self.time - self.last_time_checked < 40:
+            self.logger.log(f"Foreground time: {self.foreground_time}, Last time foreground checked: {self.last_time_foreground_checked}")
+            if self.foreground_time - self.last_time_foreground_checked < 40:
                 if self.running.should_exit or self.running == self.idle_pcb:
+                    if self.running != self.idle_pcb:
+                        self.last_time_foreground_checked = self.foreground_time - self.foreground_time % 10
                     self.running = self.foreground_queue.popleft() if len(self.foreground_queue) > 0 else self.idle_pcb
-                    self.last_time_checked = self.time - self.time % 10
+
                 return self.running.pid
             
-            self.last_time_checked = self.time
+            self.last_time_foreground_checked = self.foreground_time
 
             # Case: If current process is running and it hasn't finished add it back to the ready queue
             if not self.running == self.idle_pcb and not self.running.should_exit:
@@ -269,5 +284,9 @@ class Kernel:
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def timer_interrupt(self) -> PID:
         self.time += 10
+        if self.current_level == "Foreground":
+            self.foreground_time += 10
+        elif self.current_level == "Background":
+            self.background_time += 10
         self.choose_next_process()
         return self.running.pid
