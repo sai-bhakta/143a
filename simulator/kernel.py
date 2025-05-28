@@ -1,6 +1,6 @@
 ### Fill in the following information before submitting
-# Group id: 
-# Members: 
+# Group id: 58
+# Members: Sai Bhakta, Nathan Yang, Tim Oh
 
 
 
@@ -23,6 +23,12 @@ class PCB:
         return f"PCB(pid={self.pid}, priority={self.priority}, should_exit={self.should_exit})"
 
 
+class Semaphore:
+    def __init__(self, initial_value: int):
+        self.value = initial_value
+        self.blocked_queue = deque()
+
+
 # This class represents the Kernel of the simulation.
 # The simulator will create an instance of this object and use it to respond to syscalls and interrupts.
 # DO NOT modify the name of this class or remove it.
@@ -32,6 +38,7 @@ class Kernel:
     waiting_queue: deque[PCB]
     running: PCB
     idle_pcb: PCB
+    semaphores: dict[int, Semaphore]
 
     # Called before the simulation begins.
     # Use this method to initilize any variables you need throughout the simulation.
@@ -254,17 +261,56 @@ class Kernel:
     # This method is triggered when the currently running process requests to initialize a new semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_init_semaphore(self, semaphore_id: int, initial_value: int):
-        return
+        self.semaphores[semaphore_id] = Semaphore(initial_value)
     
     # This method is triggered when the currently running process calls p() on an existing semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_semaphore_p(self, semaphore_id: int) -> PID:
-        return self.running.pid
+        semaphore = self.semaphores[semaphore_id]
+        semaphore.value -= 1
+
+        if semaphore.value < 0:
+            semaphore.blocked_queue.append(self.running)
+            self.running = self.idle_pcb
+            return self.choose_next_process()
+        else:
+            return self.running.pid
 
     # This method is triggered when the currently running process calls v() on an existing semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_semaphore_v(self, semaphore_id: int) -> PID:
-        return self.running.pid
+        semaphore = self.semaphores[semaphore_id]
+        semaphore.value += 1
+
+        if semaphore.value <= 0:
+            if len(semaphore.blocked_queue) > 0:
+                unblocked_pcb = None
+                if self.scheduling_algorithm in ["FCFS", "RR"]:
+                    min_pid = float('inf')
+                    for pcb in semaphore.blocked_queue:
+                        if pcb.pid < min_pid:
+                            min_pid = pcb.pid
+                            unblocked_pcb = pcb
+                elif self.scheduling_algorithm == "Priority":
+                    min_priority = float('inf')
+                    min_pid = float('inf')
+                    for pcb in semaphore.blocked_queue:
+                        if pcb.priority < min_priority:
+                            min_priority = pcb.priority
+                            min_pid = pcb.pid
+                            unblocked_pcb = pcb
+                        elif pcb.priority == min_priority and pcb.pid < min_pid:
+                            min_pid = pcb.pid
+                            unblocked_pcb = pcb
+
+                if unblocked_pcb:
+                    semaphore.blocked_queue.remove(unblocked_pcb)
+                    self.ready_queue.append(unblocked_pcb)
+
+        if self.scheduling_algorithm == "FCFS":
+            return self.running.pid
+        else:
+            return self.choose_next_process()
 
     # This method is triggered when the currently running process requests to initialize a new mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
